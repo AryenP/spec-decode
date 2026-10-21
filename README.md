@@ -1,157 +1,58 @@
 # spec-decode
 
-KV-cache and speculative decoding, implemented from scratch on GPT-2 in under 400
-lines of PyTorch, with tokens/sec measured on named hardware.
+GPT-2 decoding written from scratch to see how much speculative decoding buys on a laptop. On my M2 Pro it's 2.1x over a plain KV cache, and the output is byte-identical to what the big model would have produced on its own.
 
-HuggingFace supplies only the weights and the tokenizer. The transformer
-forward pass, the pre-allocated KV cache with rollback, and all three decoders
-(full recompute, cached, speculative) are in [`specdecode/`](specdecode/) and
-every line can be defended in an interview.
+HuggingFace is only used for the weights and the tokenizer. The forward pass, the KV cache and the three decoders are in `specdecode/`, about 390 lines.
 
-## What it proves
+## Numbers
 
-| claim | how it is checked |
-|---|---|
-| The from-scratch GPT-2 is correct | logits match `transformers` to 1e-3 ([test](tests/test_correctness.py)) |
-| The KV cache is exact, not approximate | cached logits match full recompute to 1e-4, both chunked and one token at a time |
-| Speculative greedy output is the target's greedy output | `torch.equal` on every benchmark row (`identical` column) |
-| Speculative sampling (T>0) preserves the target distribution | 400-draw frequency test against the target's own softmax, within 4 standard errors |
-| Numbers are reproducible | every JSONL row carries chip, memory, torch version, dtype, model sizes, prompt/new tokens, warmup, repeats |
+Apple M2 Pro, 32 GB, PyTorch 2.14.1 on MPS, fp32. gpt2-xl (1.56B) is the target, gpt2 (124M) is the draft. 64-token prompt, 128 new tokens, greedy, median of 3 runs after a warmup. Raw rows with the full config are in `results/`.
 
-## Results
+| method | γ | tok/s | vs KV | target forwards | accepted per round |
+|---|---|---|---|---|---|
+| recompute everything | | 8.4 | 0.43x | 128 | |
+| KV cache | | 19.8 | 1.00x | 128 | |
+| speculative | 2 | 34.9 | 1.77x | 51 | 1.58 |
+| speculative | 4 | **41.7** | **2.11x** | 35 | 2.79 |
+| speculative | 6 | 37.9 | 1.92x | 30 | 3.45 |
+| speculative | 8 | 34.8 | 1.76x | 27 | 3.96 |
 
-All numbers measured on an **Apple M2 Pro, 32 GB unified memory**, PyTorch 2.14.1,
-MPS backend, fp32, median of 3 runs after 1 warmup. Raw rows with every
-configuration field are in [`results/`](results/). Reproduce with the commands
-under [Run it](#run-it).
+γ=4 wins. Past that the draft keeps proposing tokens the target rejects, acceptance drops from 0.71 to 0.51 per token, and the extra draft passes eat the gain.
 
-### Greedy decoding, gpt2-xl target (1.56 B) with gpt2 draft (124 M)
+With sampling at T=0.8 instead of greedy, γ=4 gets 32.3 tok/s, 1.67x. Draft and target now have to agree on a random draw rather than an argmax, so fewer tokens get accepted.
 
-**gpt2-xl** (1557.6 M) target, **gpt2** (124.4 M) draft · Apple M2 Pro, 32 GB · mps float32 · torch 2.14.1 · prompt 64 tok, 128 new tok, T=0.0 · median of 3 after 1 warmup
+## The version that was slower than no speculation at all
 
-| method | γ | tok/s | vs KV | wall s | target fwds | draft fwds | accept rate | accepted/round | identical |
-|---|---|---|---|---|---|---|---|---|---|
-| no_cache | — | 8.4 | 0.43× | 15.14 | 128 | 0 | — | — | yes |
-| kv_cache | — | 19.8 | 1.00× | 6.48 | 128 | 0 | — | — | yes |
-| speculative | 2 | 34.9 | 1.77× | 3.66 | 51 | 101 | 0.79 | 1.58 | yes |
-| speculative | 4 | 41.7 | 2.11× | 3.07 | 35 | 134 | 0.71 | 2.79 | yes |
-| speculative | 6 | 37.9 | 1.92× | 3.37 | 30 | 173 | 0.58 | 3.45 | yes |
-| speculative | 8 | 34.8 | 1.76× | 3.68 | 27 | 203 | 0.51 | 3.96 | yes |
+My first implementation ran at 0.85x of the KV baseline. The `target forwards` column gave it away: 130 forwards for 128 tokens at γ=2. After every round I rolled both caches back to the committed prefix and re-fed the accepted tokens to the target, so each round cost two target passes instead of one. The fix is to carry the last committed token into the next verify pass along with the new drafts, and roll back only over rejected positions. Those rows are kept in `results/v1-two-target-forwards-*.jsonl`. I also changed the prompt between v1 and v2 (the first one was a sentence repeated eight times, which hurt acceptance), so the acceptance rates aren't comparable across the two. The forward count is.
 
-- The KV cache alone is **2.3×** over full recompute at 128 new tokens; the gap
-  grows with sequence length because recompute is O(n²).
-- Speculative decoding on top is **2.11× over the KV baseline at γ=4**
-  (41.7 vs 19.8 tok/s) with the output bit-identical to target greedy on every
-  row. Target forwards drop from 128 to 35.
-- γ=4 is the sweet spot here. Longer drafts raise accepted tokens per round
-  (2.8 → 4.0) but the per-token acceptance rate falls (0.71 → 0.51), so extra
-  draft forwards are increasingly wasted on tokens that get rejected.
+## Things I haven't measured
 
-### Sampling at temperature 0.8, same models
+I don't have a CUDA GPU. MPS kernel launches are slow, which makes the draft's γ small passes relatively expensive here. On a real GPU I'd expect the sweet spot to move to a longer γ, but that's a guess.
 
-**gpt2-xl** (1557.6 M) target, **gpt2** (124.4 M) draft · Apple M2 Pro, 32 GB · mps float32 · torch 2.14.1 · prompt 64 tok, 128 new tok, T=0.8 · median of 3 after 1 warmup
+gpt2-large as a target: the download died on a full disk. bf16 works in the code but isn't in the table. Batch size is 1 for the speculative path; batched acceptance needs ragged cache rollback and I haven't written it.
 
-| method | γ | tok/s | vs KV | wall s | target fwds | draft fwds | accept rate | accepted/round | identical |
-|---|---|---|---|---|---|---|---|---|---|
-| kv_cache | — | 19.3 | 1.00× | 6.64 | 128 | 0 | — | — | n/a |
-| speculative | 4 | 32.3 | 1.67× | 3.97 | 44 | 172 | 0.50 | 1.98 | n/a |
+## How speculative decoding works, in one screen
 
-Sampling lowers the acceptance rate (0.71 → 0.50 at γ=4) because the draft and
-target now have to agree on a random draw rather than an argmax, so the speedup
-falls to **1.67×**. The output distribution is still exactly the target's; the
-test suite checks this empirically.
+Each decode step reads every weight once, so a 1.5B model is bandwidth-bound and reads ~6 GB per token in fp32. Scoring 5 positions in one pass costs about the same as scoring 1. So: let a 124M draft guess γ tokens, verify all of them in one target pass, keep the ones the target agrees with.
 
-### The bug the first version had, kept as evidence
+The accept rule from Leviathan et al. (2023): accept draft token `d` with probability `min(1, p(d)/q(d))` where `p` is the target's distribution and `q` the draft's. On the first rejection, sample from `max(0, p − q)` renormalised, and stop. If everything is accepted, take one bonus token from the target's last position. That's a rejection sampler whose output is exactly `p`, so a bad draft can't change what comes out, only how fast. Greedy is the special case where accept means argmax match, which is why `torch.equal` holds on every row above.
 
-**gpt2-xl** (1557.6 M) target, **gpt2** (124.4 M) draft · Apple M2 Pro, 32 GB · mps float32 · torch 2.14.1 · prompt 64 tok, 128 new tok, T=0.0 · median of 3 after 1 warmup
+## Tests
 
-| method | γ | tok/s | vs KV | wall s | target fwds | draft fwds | accept rate | accepted/round | identical |
-|---|---|---|---|---|---|---|---|---|---|
-| no_cache | — | 8.4 | 0.43× | 15.18 | 128 | 0 | — | — | yes |
-| kv_cache | — | 19.6 | 1.00× | 6.54 | 128 | 0 | — | — | yes |
-| speculative | 2 | 16.7 | 0.85× | 7.68 | 130 | 130 | 0.49 | 0.98 | yes |
-| speculative | 4 | 17.3 | 0.88× | 7.40 | 110 | 218 | 0.34 | 1.34 | yes |
-| speculative | 6 | 16.1 | 0.82× | 7.95 | 102 | 302 | 0.26 | 1.53 | yes |
-| speculative | 8 | 14.1 | 0.72× | 9.09 | 100 | 392 | 0.20 | 1.58 | yes |
+`uv run pytest` (about 2 minutes on CPU, downloads gpt2 and gpt2-medium):
 
-Version 1 rolled both caches back to the committed prefix after each round and
-re-fed the accepted tokens to the target, so every round cost **two** target
-forwards. At γ=2 that is 130 target forwards for 128 tokens, more than plain
-decoding, and speculative ran at 0.72–0.88× of the KV baseline. The fix is to
-feed the previous round's last committed token together with the new drafts in
-the single verify pass and roll back only over the rejected positions. (The v1
-run also used a repetitive synthetic prompt, which explains its lower
-acceptance rate; the doubled forward count is independent of the prompt.)
-
-### Not measured
-
-gpt2-large as a target, bf16, CPU, and a CUDA GPU. The gpt2-large download
-failed on a full disk; the others need hardware this machine does not have.
-Speedups will differ on CUDA, where per-kernel launch overhead is lower and the
-draft's γ forwards are relatively cheaper.
-
-## How speculative decoding works here
-
-Decoding is memory-bandwidth bound: each token reads every parameter once.
-A 1.5 B target reads ~6 GB per step in fp32; a 124 M draft reads ~0.5 GB.
-Speculative decoding (Leviathan, Kalman & Matias 2023) lets the draft propose
-γ tokens, then the target scores all γ+1 positions in **one** forward pass,
-which costs about the same as scoring one. Accepted draft tokens are free
-target tokens.
-
-```
-round:  draft ──γ small forwards──▶ [d1 … dγ]
-        target ─1 forward over γ positions─▶ p(·|prefix,d1..di) for every i
-        accept d_i while  rand < min(1, p_i(d_i) / q_i(d_i))      (greedy: argmax match)
-        first rejection → resample from  norm(max(0, p_i − q_i)),  stop
-        all accepted  → bonus token from the target's last position
-        roll both KV caches back to the committed length
-```
-
-The accept/reject rule is the whole trick: it is a rejection sampler whose
-stationary output is exactly the target distribution, so the draft can be
-arbitrarily bad without changing *what* comes out, only *how fast*.
-
-Expected speedup per round is (1 − α^(γ+1)) / (1 − α) target-tokens for the
-price of one target forward plus γ draft forwards, where α is the per-token
-acceptance rate. When the draft is not much smaller than the target (see the
-gpt2-medium row) the draft forwards eat the gain.
+- logits match `transformers` to 1e-3
+- cached logits match full recompute to 1e-4, both chunked and one token at a time
+- speculative greedy equals target greedy exactly, and does one target pass per round
+- with T=1.0, 400 draws of the first token match the target's own softmax within 4 standard errors
 
 ## Run it
 
 ```bash
 uv sync
-uv run pytest                                   # ~100 s on CPU, downloads gpt2 + gpt2-medium
 uv run python bench/bench.py --device mps --target gpt2-xl --draft gpt2 \
     --prompt-tokens 64 --new-tokens 128 --gammas 2 4 6 8 --repeats 3
-uv run python bench/report.py results/*.jsonl   # markdown tables
+uv run python bench/report.py results/*.jsonl
 ```
 
-## Layout
-
-```
-specdecode/model.py     GPTConfig, KVCache (append / commit / rollback), GPT with HF weight loader
-specdecode/generate.py  generate_no_cache, generate_kv, generate_speculative, GenStats
-tests/                  correctness: HF parity, cache exactness, greedy identity, sampling distribution
-bench/bench.py          timed runs, JSONL rows with full configuration
-bench/report.py         JSONL → markdown
-results/                raw rows from the runs quoted above
-```
-
-## Failure modes and limits
-
-- Batch size 1 only for the speculative path. Batched speculative decoding
-  needs per-sequence acceptance lengths and ragged cache rollback.
-- fp32 only in the quoted runs. GPT-2 in fp16 overflows in the attention
-  logits of later layers; bf16 on MPS is supported by the code but not measured.
-- `torch.multinomial` has no generator support on MPS, so sampling happens on
-  CPU. Negligible at batch 1; it would matter for large batches.
-- Sequence length is capped by GPT-2's 1024 learned positions.
-- MPS kernel-launch overhead dominates for small models, which is why the
-  draft's γ forwards are relatively expensive here compared with a CUDA GPU.
-
-## References
-
-- Leviathan, Kalman, Matias. *Fast Inference from Transformers via Speculative Decoding.* ICML 2023. arXiv:2211.17192
-- Chen et al. *Accelerating Large Language Model Decoding with Speculative Sampling.* arXiv:2302.01318
-- Radford et al. *Language Models are Unsupervised Multitask Learners.* 2019 (GPT-2)
+`specdecode/model.py` has the model and `KVCache` (append, commit, rollback). `specdecode/generate.py` has the three decoders. `bench/bench.py` refuses to write a row without the hardware and config fields.
