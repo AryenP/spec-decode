@@ -24,11 +24,16 @@ class GPTConfig:
 
 
 class KVCache:
-    """Pre-allocated key/value cache for every layer.
+    """Pre-allocated key/value cache for every layer, with a length per row.
 
-    Shapes: k, v are (n_layer, B, n_head, max_len, head_dim). `length` is the
-    number of valid positions. `rollback` is what speculative decoding needs:
-    after the target rejects a draft token, both caches drop the tail.
+    Shapes: k, v are (n_layer, B, n_head, max_len, head_dim). `lengths[b]` is
+    the number of valid positions in row b. Rows may differ once batched
+    speculative decoding accepts a different number of drafts per row; the
+    attention mask and the position ids are built from `lengths`, so a row
+    with fewer valid positions simply ignores the stale tail.
+
+    `rollback` is what speculative decoding needs: after the target rejects a
+    draft token, the cache drops the tail for that row only.
     """
 
     def __init__(self, cfg: GPTConfig, batch: int, max_len: int, device, dtype):
@@ -37,26 +42,69 @@ class KVCache:
         self.k = torch.empty(shape, device=device, dtype=dtype)
         self.v = torch.empty(shape, device=device, dtype=dtype)
         self.max_len = max_len
-        self.length = 0
+        self.batch = batch
+        self.lengths = torch.zeros(batch, dtype=torch.long)  # kept on CPU: tiny, indexed in loops
+        self.device = device
+
+    @property
+    def uniform(self) -> bool:
+        return bool((self.lengths == self.lengths[0]).all())
+
+    @property
+    def length(self) -> int:
+        """Scalar length; only meaningful when every row has the same length."""
+        assert self.uniform, "rows have different lengths; use .lengths"
+        return int(self.lengths[0])
 
     def append(self, layer: int, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Write new k/v for `layer` at the current position; return full views."""
-        T = k.shape[2]
-        end = self.length + T
-        if end > self.max_len:
-            raise RuntimeError(f"KV cache overflow: {end} > {self.max_len}")
-        self.k[layer, :, :, self.length:end] = k
-        self.v[layer, :, :, self.length:end] = v
-        return self.k[layer, :, :, :end], self.v[layer, :, :, :end]
+        """Write new k/v for `layer` at each row's current length; return views up to the longest row."""
+        B, _, T, _ = k.shape
+        if int(self.lengths.max()) + T > self.max_len:
+            raise RuntimeError(f"KV cache overflow: {int(self.lengths.max()) + T} > {self.max_len}")
+        if self.uniform:
+            s = int(self.lengths[0])
+            self.k[layer, :, :, s:s + T] = k
+            self.v[layer, :, :, s:s + T] = v
+        else:
+            for b in range(B):  # B is small; a scatter would be faster at scale
+                s = int(self.lengths[b])
+                self.k[layer, b, :, s:s + T] = k[b]
+                self.v[layer, b, :, s:s + T] = v[b]
+        S = int(self.lengths.max()) + T
+        return self.k[layer, :, :, :S], self.v[layer, :, :, :S]
 
     def commit(self, n: int) -> None:
-        self.length += n
+        self.lengths += n
 
-    def rollback(self, n: int) -> None:
-        self.length = max(0, self.length - n)
+    def rollback(self, n) -> None:
+        """n: int for every row, or a (B,) tensor of per-row counts."""
+        if not torch.is_tensor(n):
+            n = torch.full_like(self.lengths, int(n))
+        self.lengths = torch.clamp(self.lengths - n.to(self.lengths.dtype), min=0)
+
+    def attn_mask(self, T: int) -> torch.Tensor | None:
+        """(B, 1, T, S) boolean mask, True = may attend; None when nothing needs masking.
+
+        Query i of row b sits at absolute position lengths[b] + i and may see
+        every key j <= that position. For the common single-token uniform step
+        every key is valid and we skip the mask (it costs a kernel on MPS).
+        """
+        if T == 1 and self.uniform:
+            return None
+        S = int(self.lengths.max()) + T
+        j = torch.arange(S, device=self.device)[None, None, None, :]
+        i = torch.arange(T, device=self.device)[None, None, :, None]
+        L = self.lengths.to(self.device)[:, None, None, None]
+        return j <= L + i
+
+    def positions(self, T: int) -> torch.Tensor:
+        return self.lengths.to(self.device)[:, None] + torch.arange(T, device=self.device)[None, :]
 
     def bytes(self) -> int:
         return self.k.numel() * self.k.element_size() * 2
+
+    def bytes_per_token(self) -> int:
+        return self.k[:, 0, :, 0, :].numel() * self.k.element_size() * 2
 
 
 class CausalSelfAttention(nn.Module):
@@ -79,17 +127,11 @@ class CausalSelfAttention(nn.Module):
         if cache is None:
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         else:
-            past = cache.length
-            k_all, v_all = cache.append(self.layer_idx, k, v)  # (B, nh, past+T, hd)
-            if T == 1:
-                # Single new token attends to everything cached: no mask needed.
+            k_all, v_all = cache.append(self.layer_idx, k, v)  # (B, nh, S, hd)
+            mask = cache.attn_mask(T)
+            if mask is None:
                 y = F.scaled_dot_product_attention(q, k_all, v_all)
             else:
-                # New tokens see all past positions plus a causal pattern among
-                # themselves. Mask shape (T, past+T), True = may attend.
-                S = past + T
-                mask = torch.ones(T, S, dtype=torch.bool, device=x.device)
-                mask[:, past:] = torch.tril(torch.ones(T, T, dtype=torch.bool, device=x.device))
                 y = F.scaled_dot_product_attention(q, k_all, v_all, attn_mask=mask)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)
@@ -150,10 +192,14 @@ class GPT(nn.Module):
         cache.length. The cache is advanced by T on return.
         """
         B, T = idx.shape
-        start = cache.length if cache is not None else 0
-        if start + T > self.cfg.n_positions:
-            raise RuntimeError(f"sequence length {start + T} exceeds n_positions {self.cfg.n_positions}")
-        pos = torch.arange(start, start + T, device=idx.device)
+        if cache is None:
+            pos = torch.arange(T, device=idx.device)
+            longest = T
+        else:
+            pos = cache.positions(T)  # (B, T), per-row offsets
+            longest = int(cache.lengths.max()) + T
+        if longest > self.cfg.n_positions:
+            raise RuntimeError(f"sequence length {longest} exceeds n_positions {self.cfg.n_positions}")
         x = self.wte(idx) + self.wpe(pos)
         for block in self.h:
             x = block(x, cache)

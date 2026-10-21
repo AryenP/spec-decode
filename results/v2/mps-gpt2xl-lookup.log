@@ -1,0 +1,2 @@
+loading gpt2-xl and gpt2 on mps float32
+W1020 23:47:14.548000 78014 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.

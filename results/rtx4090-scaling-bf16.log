@@ -1,0 +1,7 @@
+k=  1      8.65 ms      8.65 ms/pos   x1.00 vs k=1
+k=  2     12.01 ms      6.00 ms/pos   x1.39 vs k=1
+k=  4     11.63 ms      2.91 ms/pos   x1.34 vs k=1
+k=  8     11.29 ms      1.41 ms/pos   x1.31 vs k=1
+k= 16     11.58 ms      0.72 ms/pos   x1.34 vs k=1
+k= 32     12.48 ms      0.39 ms/pos   x1.44 vs k=1
+k= 64     11.62 ms      0.18 ms/pos   x1.34 vs k=1

@@ -1,0 +1,11 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+loading gpt2-xl and gpt2 on cuda float32
+no_cache             41.57 tok/s  3.08s  target_fwd=128  identical=True
+kv_cache             45.78 tok/s  2.80s  target_fwd=128  identical=True
+speculative γ=2      54.01 tok/s  2.37s  target_fwd= 51 acc=0.79 (1.58/round)  identical=True
+speculative γ=4      36.22 tok/s  3.53s  target_fwd= 35 acc=0.71 (2.79/round)  identical=True
+speculative γ=6      42.11 tok/s  3.04s  target_fwd= 30 acc=0.58 (3.45/round)  identical=True
+speculative γ=8      31.96 tok/s  4.01s  target_fwd= 27 acc=0.51 (3.96/round)  identical=True
+lookup_n3 γ=4        93.18 tok/s  1.37s  target_fwd= 74 acc=0.72 (0.75/round)  identical=True
+
+speedup vs kv_cache: speculative γ=2: 1.18x, speculative γ=4: 0.79x, speculative γ=6: 0.92x, speculative γ=8: 0.70x, lookup_n3 γ=4: 2.04x

@@ -1,0 +1,10 @@
+B=1 kv_cache       106.50 tok/s total   106.50/row  target_fwd=128  acc=None  identical=True
+B=1 speculative    139.28 tok/s total   139.28/row  target_fwd= 35  acc=0.7206  identical=True
+B=2 kv_cache       194.05 tok/s total    97.03/row  target_fwd=128  acc=None  identical=True
+B=2 speculative    201.97 tok/s total   100.98/row  target_fwd= 40  acc=0.6058  identical=True
+B=4 kv_cache       354.77 tok/s total    88.69/row  target_fwd=128  acc=None  identical=True
+B=4 speculative    330.25 tok/s total    82.56/row  target_fwd= 44  acc=0.5451  identical=True
+B=8 kv_cache       660.28 tok/s total    82.54/row  target_fwd=128  acc=None  identical=True
+B=8 speculative    518.45 tok/s total    64.81/row  target_fwd= 44  acc=0.5451  identical=True
+B=16 kv_cache      1147.56 tok/s total    71.72/row  target_fwd=128  acc=None  identical=True
+B=16 speculative    839.42 tok/s total    52.46/row  target_fwd= 44  acc=0.5451  identical=True

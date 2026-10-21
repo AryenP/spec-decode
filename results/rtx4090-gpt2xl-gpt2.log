@@ -1,0 +1,10 @@
+loading gpt2-xl and gpt2 on cuda float32
+no_cache             52.57 tok/s  2.43s  target_fwd=128  identical=True
+kv_cache            106.59 tok/s  1.20s  target_fwd=128  identical=True
+speculative γ=2     122.90 tok/s  1.04s  target_fwd= 51 acc=0.79 (1.58/round)  identical=True
+speculative γ=4     147.32 tok/s  0.87s  target_fwd= 35 acc=0.71 (2.79/round)  identical=True
+speculative γ=6     156.54 tok/s  0.82s  target_fwd= 30 acc=0.58 (3.45/round)  identical=True
+speculative γ=8     145.37 tok/s  0.88s  target_fwd= 27 acc=0.51 (3.96/round)  identical=True
+lookup_n3 γ=4       161.06 tok/s  0.79s  target_fwd= 74 acc=0.72 (0.75/round)  identical=True
+
+speedup vs kv_cache: speculative γ=2: 1.15x, speculative γ=4: 1.38x, speculative γ=6: 1.47x, speculative γ=8: 1.36x, lookup_n3 γ=4: 1.51x

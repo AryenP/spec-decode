@@ -19,7 +19,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from specdecode.model import GPT  # noqa: E402
-from specdecode.generate import generate_no_cache, generate_kv, generate_speculative  # noqa: E402
+from specdecode.generate import generate_no_cache, generate_kv, generate_speculative, generate_lookup  # noqa: E402
 
 PROMPT = (
     "The Industrial Revolution began in Britain in the late eighteenth century and "
@@ -80,6 +80,8 @@ def main():
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--skip-no-cache", action="store_true")
+    ap.add_argument("--lookup-gammas", type=int, nargs="*", default=[], help="also run prompt-lookup decoding (no draft model) at these gammas")
+    ap.add_argument("--ngram", type=int, default=3)
     ap.add_argument("--out", default="results/results.jsonl")
     args = ap.parse_args()
 
@@ -107,6 +109,7 @@ def main():
         "temperature": args.temperature,
         "warmup": args.warmup,
         "repeats": args.repeats,
+        "kv_bytes_per_token_target": target.new_cache(1, 1).bytes_per_token(),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
@@ -116,6 +119,8 @@ def main():
     configs.append(("kv_cache", None, lambda: generate_kv(target, prompt, args.new_tokens, args.temperature)))
     for g in args.gammas:
         configs.append((f"speculative", g, (lambda g=g: generate_speculative(target, draft, prompt, args.new_tokens, gamma=g, temperature=args.temperature))))
+    for g in args.lookup_gammas:
+        configs.append((f"lookup_n{args.ngram}", g, (lambda g=g: generate_lookup(target, prompt, args.new_tokens, gamma=g, ngram=args.ngram, temperature=args.temperature))))
 
     # Greedy reference every method must reproduce exactly.
     ref_ids = generate_kv(target, prompt, args.new_tokens, 0.0)[0] if args.temperature == 0.0 else None
@@ -152,7 +157,7 @@ def main():
                   f"target_fwd={row['target_forwards']:3d}{acc}  identical={identical}")
     kv = next(r for r in rows if r["method"] == "kv_cache")["tokens_per_s"]
     print(f"\nspeedup vs kv_cache: " + ", ".join(
-        f"γ={r['gamma']}: {r['tokens_per_s']/kv:.2f}x" for r in rows if r["gamma"]))
+        f"{r['method']} γ={r['gamma']}: {r['tokens_per_s']/kv:.2f}x" for r in rows if r["gamma"]))
 
 
 if __name__ == "__main__":

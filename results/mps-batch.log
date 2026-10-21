@@ -1,0 +1,9 @@
+W1021 00:09:01.768000 80800 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+B=1 kv_cache        19.47 tok/s total    19.47/row  target_fwd=128  acc=None  identical=True
+B=1 speculative     36.11 tok/s total    36.11/row  target_fwd= 35  acc=0.7206  identical=True
+B=2 kv_cache        37.84 tok/s total    18.92/row  target_fwd=128  acc=None  identical=True
+B=2 speculative     46.71 tok/s total    23.35/row  target_fwd= 40  acc=0.6058  identical=True
+B=4 kv_cache        70.89 tok/s total    17.72/row  target_fwd=128  acc=None  identical=True
+B=4 speculative     77.46 tok/s total    19.36/row  target_fwd= 44  acc=0.5451  identical=True
+B=8 kv_cache       110.90 tok/s total    13.86/row  target_fwd=128  acc=None  identical=True
+B=8 speculative    135.59 tok/s total    16.95/row  target_fwd= 44  acc=0.5451  identical=True

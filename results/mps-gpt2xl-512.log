@@ -1,0 +1,8 @@
+loading gpt2-xl and gpt2 on mps float32
+W1020 23:57:48.723000 79424 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+no_cache              3.32 tok/s  154.07s  target_fwd=512  identical=True
+kv_cache             18.91 tok/s  27.07s  target_fwd=512  identical=True
+speculative γ=4      37.94 tok/s  13.49s  target_fwd=111 acc=0.91 (3.65/round)  identical=True
+lookup_n3 γ=4        49.80 tok/s  10.28s  target_fwd=154 acc=0.92 (2.35/round)  identical=True
+
+speedup vs kv_cache: speculative γ=4: 2.01x, lookup_n3 γ=4: 2.63x
