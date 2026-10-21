@@ -1,0 +1,11 @@
+loading gpt2-xl and gpt2 on mps float32
+W1020 21:14:37.129000 54756 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+no_cache              8.43 tok/s  15.18s  target_fwd=128  identical=True
+kv_cache             19.57 tok/s  6.54s  target_fwd=128  identical=True
+speculative γ=2      16.66 tok/s  7.68s  target_fwd=130 acc=0.49 (0.98/round)  identical=True
+speculative γ=4      17.31 tok/s  7.40s  target_fwd=110 acc=0.34 (1.34/round)  identical=True
+speculative γ=6      16.10 tok/s  7.95s  target_fwd=102 acc=0.26 (1.53/round)  identical=True
+speculative γ=8      14.07 tok/s  9.09s  target_fwd=100 acc=0.20 (1.58/round)  identical=True
+
+speedup vs kv_cache: γ=2: 0.85x, γ=4: 0.88x, γ=6: 0.82x, γ=8: 0.72x

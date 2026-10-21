@@ -1,0 +1,21 @@
+[project]
+name = "spec-decode"
+version = "0.1.0"
+description = "KV-cache and speculative decoding implemented from scratch on GPT-2, with measured tokens/sec"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "torch>=2.4",
+  "transformers>=4.44",
+  "safetensors>=0.4",
+  "numpy>=1.26",
+  "tiktoken>=0.7",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
